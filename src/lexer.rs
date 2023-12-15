@@ -154,33 +154,67 @@ impl<'a> Lexer<'a> {
         let mut str_buf = String::new();
         let mut utf16_buf = vec![];
 
-        while let Some(c1) = self.chars.peek() {
+        while let Some(c1) = self.chars.next() {
             match c1 {
                 '\\' => {
                     let c2 = self
                         .chars
                         .next()
                         .ok_or(LexerError::new("error: a next char is expected"))?;
-                    if matches!(c2, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't') {}
+                    if matches!(c2, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't') {
+                        Self::push_utf16(&mut str_buf, &mut utf16_buf)?;
+                        str_buf.push('\\');
+                        str_buf.push(c2);
+                    } else if c2 == 'u' {
+                        let hexs = (0..4)
+                            .filter_map(|_| {
+                                let c = self.chars.next()?;
+                                if c.is_ascii_hexdigit() {
+                                    Some(c)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>();
+
+                        match u16::from_str_radix(&hexs.iter().collect::<String>(), 16) {
+                            Ok(code_point) => utf16_buf.push(code_point),
+                            Err(e) => {
+                                return Err(LexerError::new(&format!(
+                                    "error: a unicode character is expected {}",
+                                    e.to_string()
+                                )))
+                            }
+                        };
+                    }
+                }
+                '\"' => {
+                    Self::push_utf16(&mut str_buf, &mut utf16_buf)?;
+                    return Ok(Some(Token::String(str_buf)));
+                }
+                _ => {
+                    Self::push_utf16(&mut str_buf, &mut utf16_buf)?;
+                    str_buf.push(c1);
                 }
             }
         }
-        todo!();
-        fn push_utf16(str_buf: &mut String, utf16: &mut Vec<u16>) -> Result<(), LexerError> {
-            if utf16.is_empty() {
-                return Ok(());
-            }
-            match String::from_utf16(utf16) {
-                Ok(utf16_str) => {
-                    str_buf.push_str(&utf16_str);
-                    utf16.clear();
-                }
-                Err(e) => {
-                    return Err(LexerError::new(&format!("error: {}", e.to_string())));
-                }
-            };
-            Ok(())
+        Ok(None)
+    }
+
+    fn push_utf16(str_buf: &mut String, utf16: &mut Vec<u16>) -> Result<(), LexerError> {
+        if utf16.is_empty() {
+            return Ok(());
         }
+        match String::from_utf16(utf16) {
+            Ok(utf16_str) => {
+                str_buf.push_str(&utf16_str);
+                utf16.clear();
+            }
+            Err(e) => {
+                return Err(LexerError::new(&format!("error: {}", e.to_string())));
+            }
+        };
+        Ok(())
     }
 }
 
@@ -234,5 +268,113 @@ mod tests {
         let num = "+2E10";
         let tokens = Lexer::new(num).tokenize().unwrap();
         assert_eq!(tokens[0], Token::Number(20000000000f64));
+    }
+
+    #[test]
+    fn test_string() {
+        let s = "\"togatoga123\"";
+        let tokens = Lexer::new(s).tokenize().unwrap();
+        assert_eq!(tokens[0], Token::String("togatoga123".to_string()));
+
+        let s = "\"あいうえお\"";
+        let tokens = Lexer::new(s).tokenize().unwrap();
+        assert_eq!(tokens[0], Token::String("あいうえお".to_string()));
+
+        let s = r#""\u3042\u3044\u3046abc""#; //あいうabc
+
+        let tokens = Lexer::new(s).tokenize().unwrap();
+        assert_eq!(tokens[0], Token::String("あいうabc".to_string()));
+
+        let s = format!(r#" " \b \f \n \r \t \/ \" ""#);
+        let tokens = Lexer::new(&s).tokenize().unwrap();
+        assert_eq!(
+            tokens[0],
+            Token::String(r#" \b \f \n \r \t \/ \" "#.to_string())
+        );
+
+        let s = r#""\uD83D\uDE04\uD83D\uDE07\uD83D\uDC7A""#;
+        let tokens = Lexer::new(&s).tokenize().unwrap();
+        assert_eq!(tokens[0], Token::String(r#"😄😇👺"#.to_string()));
+    }
+
+    #[test]
+    fn test_tokenize() {
+        let obj = r#"
+        {
+            "number": 123,
+            "boolean": true,
+            "string": "togatoga",
+            "object": {
+               "number": 2E10
+            }
+         }
+         "#;
+         
+        // object
+        let tokens = Lexer::new(obj).tokenize().unwrap();
+        let result_tokens = [
+            // start {
+            Token::LeftBrace,
+            // begin: "number": 123,
+            Token::String("number".to_string()),
+            Token::Colon,
+            Token::Number(123f64),
+            Token::Comma,
+            // end
+
+            // begin: "boolean": true,
+            Token::String("boolean".to_string()),
+            Token::Colon,
+            Token::Bool(true),
+            Token::Comma,
+            // end
+
+            // begin: "string": "togatoga",
+            Token::String("string".to_string()),
+            Token::Colon,
+            Token::String("togatoga".to_string()),
+            Token::Comma,
+            // end
+
+            // begin: "object": {
+            Token::String("object".to_string()),
+            Token::Colon,
+            Token::LeftBrace,
+            // begin: "number": 2E10,
+            Token::String("number".to_string()),
+            Token::Colon,
+            Token::Number(20000000000f64),
+            // end
+            Token::RightBrace,
+            // end
+            Token::RightBrace,
+            // end
+        ];
+        tokens
+            .iter()
+            .zip(result_tokens.iter())
+            .enumerate()
+            .for_each(|(i, (x, y))| {
+                assert_eq!(x, y, "index: {}", i);
+            });
+
+        // array
+        let a = "[true, {\"キー\": null}]";
+        let tokens = Lexer::new(a).tokenize().unwrap();
+        let result_tokens = vec![
+            Token::LeftBracket,
+            Token::Bool(true),
+            Token::Comma,
+            Token::LeftBrace,
+            Token::String("キー".to_string()),
+            Token::Colon,
+            Token::Null,
+            Token::RightBrace,
+            Token::RightBracket,
+        ];
+        tokens
+            .iter()
+            .zip(result_tokens.iter())
+            .for_each(|(x, y)| assert_eq!(x, y));
     }
 }
