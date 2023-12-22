@@ -146,7 +146,7 @@ impl<'a> Lexer<'a> {
         }
         match num_buf.parse::<f64>() {
             Ok(number) => Ok(Some(Token::Number(number))),
-            Err(e) => Err(LexerError::new(&format!("error: {}", e.to_string()))),
+            Err(e) => Err(LexerError::new(&format!("error: {}", e))),
         }
     }
 
@@ -160,7 +160,7 @@ impl<'a> Lexer<'a> {
                     let c2 = self
                         .chars
                         .next()
-                        .ok_or(LexerError::new("error: a next char is expected"))?;
+                        .ok_or_else(|| LexerError::new("error: a next char is expected"))?;
                     if matches!(c2, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't') {
                         Self::push_utf16(&mut str_buf, &mut utf16_buf)?;
                         str_buf.push('\\');
@@ -182,7 +182,7 @@ impl<'a> Lexer<'a> {
                             Err(e) => {
                                 return Err(LexerError::new(&format!(
                                     "error: a unicode character is expected {}",
-                                    e.to_string()
+                                    e
                                 )))
                             }
                         };
@@ -211,7 +211,7 @@ impl<'a> Lexer<'a> {
                 utf16.clear();
             }
             Err(e) => {
-                return Err(LexerError::new(&format!("error: {}", e.to_string())));
+                return Err(LexerError::new(&format!("error: {}", e)));
             }
         };
         Ok(())
@@ -285,15 +285,15 @@ mod tests {
         let tokens = Lexer::new(s).tokenize().unwrap();
         assert_eq!(tokens[0], Token::String("あいうabc".to_string()));
 
-        let s = format!(r#" " \b \f \n \r \t \/ \" ""#);
-        let tokens = Lexer::new(&s).tokenize().unwrap();
+        let s = r#" " \b \f \n \r \t \/ \" ""#;
+        let tokens = Lexer::new(s).tokenize().unwrap();
         assert_eq!(
             tokens[0],
             Token::String(r#" \b \f \n \r \t \/ \" "#.to_string())
         );
 
         let s = r#""\uD83D\uDE04\uD83D\uDE07\uD83D\uDC7A""#;
-        let tokens = Lexer::new(&s).tokenize().unwrap();
+        let tokens = Lexer::new(s).tokenize().unwrap();
         assert_eq!(tokens[0], Token::String(r#"😄😇👺"#.to_string()));
     }
 
@@ -309,7 +309,7 @@ mod tests {
             }
          }
          "#;
-         
+
         // object
         let tokens = Lexer::new(obj).tokenize().unwrap();
         let result_tokens = [
